@@ -18,3 +18,7 @@ Resources:
       Parameters:
         "VpcStackName" : {"Fn::GetAtt": ["InfraVpc", "Outputs.StackName"] }   
 
+
+Outputs:
+  LoadBalancerURL:
+    Value: {"Fn::GetAtt": ["InfraEc2Elb", "Outputs.LoadBalancerURL"] }   

@@ -40,20 +40,55 @@ Resources:
     Type: AWS::EC2::InternetGateway
     #Properties:
 
-  RouteViaIgw:
+  PublicRT:
     Type: AWS::EC2::RouteTable
     Properties:
       Tags:
         -
           Key: Name
-          Value: route-via-igw
+          Value: public-rt
       VpcId: !Ref Vpc
+
   PublicRouteViaIgw:
     Type: AWS::EC2::Route
     Properties: 
-      RouteTableId: !Ref RouteViaIgw
+      RouteTableId: !Ref PublicRT
       DestinationCidrBlock: 0.0.0.0/0
       GatewayId: !Ref InternetGateway
+
+
+  PrivateRTZoneA:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        -
+          Key: Name
+          Value: private-rt-zone-A
+      VpcId: !Ref Vpc
+      
+  RouteViaNATGWZoneA:
+    Type: AWS::EC2::Route
+    Properties: 
+      RouteTableId: !Ref PrivateRTZoneA
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PrivateRTZoneA
+
+  PrivateRTZoneB:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        -
+          Key: Name
+          Value: private-rt-zone-B
+      VpcId: !Ref Vpc
+      
+  RouteViaNATGWZoneB:
+    Type: AWS::EC2::Route
+    Properties: 
+      RouteTableId: !Ref PrivateRTZoneB
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref PrivateRTZoneB
+
 
   PublicZoneA:
     Type: AWS::EC2::Subnet
@@ -112,28 +147,76 @@ Resources:
           - Fn::GetAZs: ""
 
 
+
+  NATGWZoneA:
+    DependsOn: VPCGWAttach
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - EIPZoneA
+        - AllocationId
+      SubnetId:
+        Ref: PublicZoneA
+  EIPZoneA:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  RouteViaNATGWZoneA:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRTZoneA
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: NATGWZoneA
+
+  NATGWZoneB:
+    DependsOn: VPCGWAttach
+    Type: AWS::EC2::NatGateway
+    Properties:
+      AllocationId:
+        Fn::GetAtt:
+        - EIPZoneB
+        - AllocationId
+      SubnetId:
+        Ref: PublicZoneB
+  EIPZoneB:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+  RouteViaNATGWZoneB:
+    Type: AWS::EC2::Route
+    Properties:
+      RouteTableId:
+        Ref: PrivateRTZoneB
+      DestinationCidrBlock: 0.0.0.0/0
+      NatGatewayId:
+        Ref: NATGWZoneB
+
+
   PublicZoneARouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      RouteTableId: !Ref RouteViaIgw
+      RouteTableId: !Ref PublicRT
       SubnetId: !Ref PublicZoneA
 
   PublicZoneBRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      RouteTableId: !Ref RouteViaIgw
+      RouteTableId: !Ref PublicRT
       SubnetId: !Ref PublicZoneB
 
   EC2ZoneARouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      RouteTableId: !Ref RouteViaIgw
+      RouteTableId: !Ref PrivateRTZoneA
       SubnetId: !Ref EC2ZoneA
 
   EC2ZoneBRouteTableAssociation:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
-      RouteTableId: !Ref RouteViaIgw
+      RouteTableId: !Ref PrivateRTZoneB
       SubnetId: !Ref EC2ZoneB
 
 
@@ -155,8 +238,6 @@ Outputs:
         "Fn::Sub": 
           - ${StackName}-VpcId
           - StackName: !Ref AWS::StackName
-
-
 
   PublicZoneA:
     Value:
@@ -195,5 +276,4 @@ Outputs:
         "Fn::Sub": 
           - ${StackName}-EC2ZoneB
           - StackName: !Ref AWS::StackName
-
 

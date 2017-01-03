@@ -16,8 +16,8 @@ Mappings:
 Parameters:
   SshKeyName:
     Type: String
-    Description: Optional - Name of an existing EC2 KeyPair to enable SSH access to the ECS instances
-    Default: NoValue
+    #Description: Optional - Name of an existing EC2 KeyPair to enable SSH access to the ECS instances
+    #Default: NoValue
   VpcStackName:
     Type: String
 
@@ -25,17 +25,21 @@ Conditions:
   HasSshKeyName: !Not [ !Equals [!Ref SshKeyName, NoValue] ]
 
 Resources:
-  SgDefault:
+  SgLB:
     Type: AWS::EC2::SecurityGroup
     Properties:
       GroupDescription: "sg for LoadBalancer"
       VpcId: !ImportValue {"Fn::Sub" : "${VpcStackName}-VpcId"}
-
+  SgEC2:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: "sg for ec2"
+      VpcId: !ImportValue {"Fn::Sub" : "${VpcStackName}-VpcId"}
 
   ingress1:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
-      GroupId: !Ref SgDefault
+      GroupId: !Ref SgLB
       IpProtocol: tcp
       FromPort: 80
       ToPort: 80
@@ -44,78 +48,144 @@ Resources:
   ingress2:
     Type: AWS::EC2::SecurityGroupIngress
     Properties:
-      GroupId: !Ref SgDefault
+      GroupId: !Ref SgLB
       IpProtocol: tcp
       FromPort: 22
       ToPort: 22
       CidrIp: 0.0.0.0/0
 
+  ingress3:
+    Type: AWS::EC2::SecurityGroupIngress
+    Properties:
+      GroupId: !Ref SgEC2
+      IpProtocol: tcp
+      FromPort: 0
+      ToPort: 65535
+      CidrIp: 10.0.0.0/16
 
+  ALBListener:
+    Type : AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        -
+          Type: forward
+          TargetGroupArn: !Ref publicALBTargetGroup
+      LoadBalancerArn: !Ref publicALB
+      Port: 80
+      Protocol: HTTP
 
-  NginxLB:
-    DependsOn:
-      - NginxEc2ZoneA
-      - NginxEc2ZoneB
-    Type: "AWS::EC2::Instance"
-    Properties: 
-      DisableApiTermination: false
-      InstanceInitiatedShutdownBehavior: stop
-      #IamInstanceProfile: !Ref ApiInstanceProfileRef
-      ImageId:
-        !FindInMap
-          - AmiId
-          - default
-          - balancer
-      InstanceType: 
-        !FindInMap
-          - InstanceType
-          - default
-          - balancer
-      KeyName:
-        !If 
-          - HasSshKeyName
-          - !Ref SshKeyName
-          - !Ref AWS::NoValue
-      Monitoring: true
+  publicALB:
+    Type: "AWS::ElasticLoadBalancingV2::LoadBalancer"
+    Properties:
+      #LoadBalancerAttributes:
+      #  - LoadBalancerAttributes
+      Name: public-alb
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref SgLB
+      Subnets:
+        - !ImportValue {"Fn::Sub" : "${VpcStackName}-PublicZoneA"}
+        - !ImportValue {"Fn::Sub" : "${VpcStackName}-PublicZoneB"}
+      Tags:
+        -
+          Key: Name
+          Value: public-alb
+
+  publicALBTargetGroup:
+    Type: "AWS::ElasticLoadBalancingV2::TargetGroup"
+    Properties:
+      HealthCheckIntervalSeconds: 30
+      HealthCheckPath: /demo.html
+      HealthCheckPort: 80
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 10
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: '200'
+      Name: http-tg
+      Port: 80
+      Protocol: HTTP
       Tags:
         - 
           Key: Name
-          Value: cfn-nginx-lb
-      NetworkInterfaces:
-        -
-          DeleteOnTermination: true
-          Description: Primary network interface
-          DeviceIndex: 0
-          SubnetId: !ImportValue {"Fn::Sub" : "${VpcStackName}-PublicZoneA"}
-          GroupSet:
-           - !Ref SgDefault
-          AssociatePublicIpAddress: true
+          Value: alb-tg
+      #TargetGroupAttributes:
+      #  - TargetGroupAttributes
+      #TargetGroupFullName: default-target-group
+      Targets:
+        - 
+          Id: !Ref NginxEc2ZoneA
+          Port: 80
+        - 
+          Id: !Ref NginxEc2ZoneB
+          Port: 80        
+      UnhealthyThresholdCount: 3
+      VpcId: !ImportValue {"Fn::Sub" : "${VpcStackName}-VpcId"}
 
-      UserData:
-        "Fn::Base64":
-          !Sub 
-            - |
-                #!/bin/bash -xe
-                yum update -y
-                yum install -y nginx
-                chkconfig nginx on
-                cat<<EOF > /etc/nginx/conf.d/upstream.conf
-                upstream backend {
-                  server ${NginxEc2ZoneAIP};
-                  server ${NginxEc2ZoneBIP};
-                }
-                EOF
+  # NginxLB:
+  #   DependsOn:
+  #     - NginxEc2ZoneA
+  #     - NginxEc2ZoneB
+  #   Type: "AWS::EC2::Instance"
+  #   Properties: 
+  #     DisableApiTermination: false
+  #     InstanceInitiatedShutdownBehavior: stop
+  #     #IamInstanceProfile: !Ref ApiInstanceProfileRef
+  #     ImageId:
+  #       !FindInMap
+  #         - AmiId
+  #         - default
+  #         - balancer
+  #     InstanceType: 
+  #       !FindInMap
+  #         - InstanceType
+  #         - default
+  #         - balancer
+  #     KeyName:
+  #       !If 
+  #         - HasSshKeyName
+  #         - !Ref SshKeyName
+  #         - !Ref AWS::NoValue
+  #     Monitoring: true
+  #     Tags:
+  #       - 
+  #         Key: Name
+  #         Value: cfn-nginx-lb
+  #     NetworkInterfaces:
+  #       -
+  #         DeleteOnTermination: true
+  #         Description: Primary network interface
+  #         DeviceIndex: 0
+  #         SubnetId: !ImportValue {"Fn::Sub" : "${VpcStackName}-PublicZoneA"}
+  #         GroupSet:
+  #          - !Ref SgDefault
+  #         AssociatePublicIpAddress: true
 
-                cat<<EOF > /etc/nginx/default.d/loadbalancer.conf
-                location /demo.html {
-                  proxy_pass http://backend;
-                }
-                EOF
+  #     UserData:
+  #       "Fn::Base64":
+  #         !Sub 
+  #           - |
+  #               #!/bin/bash -xe
+  #               yum update -y
+  #               yum install -y nginx
+  #               chkconfig nginx on
+  #               cat<<EOF > /etc/nginx/conf.d/upstream.conf
+  #               upstream backend {
+  #                 server ${NginxEc2ZoneAIP};
+  #                 server ${NginxEc2ZoneBIP};
+  #               }
+  #               EOF
 
-                service nginx start
-            - 
-              NginxEc2ZoneAIP: !GetAtt NginxEc2ZoneA.PrivateIp
-              NginxEc2ZoneBIP: !GetAtt NginxEc2ZoneB.PrivateIp
+  #               cat<<EOF > /etc/nginx/default.d/loadbalancer.conf
+  #               location /demo.html {
+  #                 proxy_pass http://backend;
+  #               }
+  #               EOF
+
+  #               service nginx start
+  #           - 
+  #             NginxEc2ZoneAIP: !GetAtt NginxEc2ZoneA.PrivateIp
+  #             NginxEc2ZoneBIP: !GetAtt NginxEc2ZoneB.PrivateIp
 
 
   NginxEc2ZoneA:
@@ -151,8 +221,8 @@ Resources:
           DeviceIndex: 0
           SubnetId: !ImportValue {"Fn::Sub" : "${VpcStackName}-EC2ZoneA"}
           GroupSet:
-           - !Ref SgDefault
-          AssociatePublicIpAddress: true
+           - !Ref SgEC2
+          #AssociatePublicIpAddress: true
       UserData:
         "Fn::Base64": |
             #!/bin/bash -xe
@@ -200,8 +270,8 @@ Resources:
           DeviceIndex: 0
           SubnetId: !ImportValue {"Fn::Sub" : "${VpcStackName}-EC2ZoneB"}
           GroupSet:
-           - !Ref SgDefault
-          AssociatePublicIpAddress: true
+           - !Ref SgEC2
+          #AssociatePublicIpAddress: true
       UserData:
         "Fn::Base64": |
             #!/bin/bash -xe
@@ -217,12 +287,22 @@ Resources:
 
 Outputs:
   LoadBalancerURL:
-    Value:
+    Value: 
       !Join
         - ""
         -
           - http://
-          - !GetAtt NginxLB.PublicDnsName
+          - !GetAtt publicALB.DNSName
           - /demo.html
     Export:
       Name: LoadBalancerURL
+  # LoadBalancerURL:
+  #   Value:
+  #     !Join
+  #       - ""
+  #       -
+  #         - http://
+  #         - !GetAtt NginxLB.PublicDnsName
+  #         - /demo.html
+  #   Export:
+  #     Name: LoadBalancerURL
